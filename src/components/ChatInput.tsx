@@ -39,7 +39,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ onSend, disabled }) => {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="What's on your mind? (Cmd+Enter)"
+          placeholder="What's on your mind?"
           className="w-full bg-transparent border-0 ring-0 outline-none focus:ring-0 focus:outline-none text-gray-100 placeholder-gray-500 resize-none max-h-60 py-2.5 px-3 text-base leading-relaxed selection:bg-sky-500/30 shadow-none appearance-none"
           rows={1}
           disabled={disabled}
