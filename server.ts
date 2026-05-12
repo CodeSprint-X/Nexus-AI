@@ -1,17 +1,22 @@
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
-import Groq from "groq-sdk";
+import GroqModule from "groq-sdk";
+const Groq = (GroqModule as any).default || GroqModule;
 import dotenv from "dotenv";
 
-dotenv.config();
+if (process.env.NODE_ENV !== "production") {
+  dotenv.config();
+}
 
+console.log("Server module loading...");
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = 3000;
 
+console.log("Express app initialized");
 app.use(express.json());
 
 // Enable CORS for Vercel
@@ -34,8 +39,29 @@ const getOpenRouterApiKey = () => {
 };
 
 // API Proxy for Streaming
-app.post("/api/chat", async (req, res) => {
+const healthHandler = (req, res) => {
+  res.json({ 
+    status: "ok", 
+    environment: process.env.VERCEL ? "vercel" : "local",
+    hasGroq: !!process.env.GROQ_API_KEY,
+    hasOpenRouter: !!process.env.OPENROUTER_API_KEY
+  });
+};
+
+app.get("/api/health", healthHandler);
+app.get("/health", healthHandler);
+
+const chatHandler = async (req, res) => {
   const { model, messages, stream = true } = req.body;
+
+  // Defensive checks
+  if (!model || typeof model !== "string") {
+    return res.status(400).json({ error: "Invalid or missing model parameter." });
+  }
+  if (!messages || !Array.isArray(messages)) {
+    return res.status(400).json({ error: "Invalid or missing messages parameter." });
+  }
+
   console.log(`[Request] Model: ${model}, Stream: ${stream}`);
 
   const isOpenRouterModel = model.includes("/");
@@ -73,13 +99,12 @@ app.post("/api/chat", async (req, res) => {
       if (stream) {
         res.setHeader("Content-Type", "text/event-stream");
         res.setHeader("Cache-Control", "no-cache");
-        // Removed Connection: keep-alive for Vercel stability
 
         const reader = response.body?.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
 
-        if (!reader) throw new Error("No reader on response");
+        if (!reader) throw new Error("No reader on response body");
 
         while (true) {
           const { done, value } = await reader.read();
@@ -122,7 +147,6 @@ app.post("/api/chat", async (req, res) => {
       if (stream) {
         res.setHeader("Content-Type", "text/event-stream");
         res.setHeader("Cache-Control", "no-cache");
-        // Removed Connection: keep-alive for Vercel stability
 
         const chatCompletion = await groq.chat.completions.create({
           messages,
@@ -156,7 +180,10 @@ app.post("/api/chat", async (req, res) => {
       res.end();
     }
   }
-});
+};
+
+app.post("/api/chat", chatHandler);
+app.post("/chat", chatHandler);
 
 async function startServer() {
   // Vite middleware for development - Dynamic import to avoid loading Vite in production
