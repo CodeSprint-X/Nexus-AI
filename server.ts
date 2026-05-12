@@ -1,143 +1,192 @@
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
-import Groq from "groq-sdk";
+import GroqModule from "groq-sdk";
+const Groq = (GroqModule as any).default || GroqModule;
 import dotenv from "dotenv";
 
-// Load local env vars (ignored on Vercel)
 if (process.env.NODE_ENV !== "production") {
   dotenv.config();
 }
 
+console.log("Server module loading...");
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+const PORT = 3000;
+
+console.log("Express app initialized");
 app.use(express.json());
 
-// Enable CORS
+// Enable CORS for Vercel
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
   next();
 });
 
-// API config helpers
-const getGroqApiKey = () => process.env.GROQ_API_KEY;
-const getOpenRouterApiKey = () => process.env.OPENROUTER_API_KEY;
+// Groq SDK instance
+const getGroqApiKey = () => {
+  const apiKey = process.env.GROQ_API_KEY;
+  return apiKey;
+};
 
-// Health Check
-app.get("/api/health", (req, res) => {
+// OpenRouter configuration
+const getOpenRouterApiKey = () => {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  return apiKey;
+};
+
+// API Proxy for Streaming
+const healthHandler = (req, res) => {
   res.json({ 
     status: "ok", 
     environment: process.env.VERCEL ? "vercel" : "local",
-    hasGroq: !!getGroqApiKey(),
-    hasOpenRouter: !!getOpenRouterApiKey()
+    hasGroq: !!process.env.GROQ_API_KEY,
+    hasOpenRouter: !!process.env.OPENROUTER_API_KEY
   });
-});
+};
 
-// Main Chat Handler
-app.post("/api/chat", async (req, res) => {
+app.get("/api/health", healthHandler);
+app.get("/health", healthHandler);
+
+const chatHandler = async (req, res) => {
   const { model, messages, stream = true } = req.body;
 
-  if (!model || !messages || !Array.isArray(messages)) {
-    return res.status(400).json({ error: "Invalid request payload." });
+  // Defensive checks
+  if (!model || typeof model !== "string") {
+    return res.status(400).json({ error: "Invalid or missing model parameter." });
   }
+  if (!messages || !Array.isArray(messages)) {
+    return res.status(400).json({ error: "Invalid or missing messages parameter." });
+  }
+
+  console.log(`[Request] Model: ${model}, Stream: ${stream}`);
 
   const isOpenRouterModel = model.includes("/");
   const apiKey = isOpenRouterModel ? getOpenRouterApiKey() : getGroqApiKey();
 
   if (!apiKey) {
     return res.status(500).json({ 
-      error: `API key for ${isOpenRouterModel ? "OpenRouter" : "Groq"} is not configured.` 
+      error: `${isOpenRouterModel ? "OPENROUTER_API_KEY" : "GROQ_API_KEY"} is not defined. Please add it to your environment variables.` 
     });
   }
 
   try {
     if (isOpenRouterModel) {
-      // Handle OpenRouter (streaming via fetch)
-      const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      // Handle OpenRouter with fetch for streaming
+      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${apiKey}`,
           "Content-Type": "application/json",
-          "HTTP-Referer": "https://nexus-ai.vercel.app",
+          "HTTP-Referer": "https://nexus-ai.vercel.app", 
+          "X-Title": "Nexus AI",
         },
-        body: JSON.stringify({ model, messages, stream }),
+        body: JSON.stringify({
+          model,
+          messages,
+          stream,
+        }),
       });
 
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        throw new Error(err.error?.message || `OpenRouter Error: ${resp.statusText}`);
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error?.message || `OpenRouter Error: ${response.statusText}`);
       }
 
       if (stream) {
         res.setHeader("Content-Type", "text/event-stream");
         res.setHeader("Cache-Control", "no-cache");
-        const reader = resp.body?.getReader();
+
+        const reader = response.body?.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
-        if (!reader) throw new Error("Stream reader not available.");
+
+        if (!reader) throw new Error("No reader on response body");
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+          
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
           buffer = lines.pop() || "";
+
           for (const line of lines) {
             const trimmed = line.trim();
-            if (!trimmed.startsWith("data: ")) continue;
+            if (!trimmed || !trimmed.startsWith("data: ")) continue;
+            
             const dataStr = trimmed.slice(6).trim();
             if (dataStr === "[DONE]") {
               res.write("data: [DONE]\n\n");
               continue;
             }
+
             try {
               const data = JSON.parse(dataStr);
               const content = data.choices[0]?.delta?.content || "";
-              if (content) res.write(`data: ${JSON.stringify({ content })}\n\n`);
-            } catch (e) {}
+              if (content) {
+                res.write(`data: ${JSON.stringify({ content })}\n\n`);
+              }
+            } catch (e) {
+              // Ignore parse errors for partial chunks
+            }
           }
         }
         res.end();
       } else {
-        const result = await resp.json();
-        res.json(result);
+        const data = await response.json();
+        res.json(data);
       }
     } else {
-      // Handle Groq (using official SDK)
+      // Handle Groq
       const groq = new Groq({ apiKey });
+      
       if (stream) {
         res.setHeader("Content-Type", "text/event-stream");
         res.setHeader("Cache-Control", "no-cache");
-        const stream = await groq.chat.completions.create({ messages, model, stream: true });
-        for await (const chunk of stream) {
+
+        const chatCompletion = await groq.chat.completions.create({
+          messages,
+          model,
+          stream: true,
+        });
+
+        for await (const chunk of chatCompletion) {
           const content = chunk.choices[0]?.delta?.content || "";
-          if (content) res.write(`data: ${JSON.stringify({ content })}\n\n`);
+          if (content) {
+            res.write(`data: ${JSON.stringify({ content })}\n\n`);
+          }
         }
         res.write("data: [DONE]\n\n");
         res.end();
       } else {
-        const completion = await groq.chat.completions.create({ messages, model, stream: false });
-        res.json(completion);
+        const chatCompletion = await groq.chat.completions.create({
+          messages,
+          model,
+          stream: false,
+        });
+        res.json(chatCompletion);
       }
     }
-  } catch (err: any) {
-    console.error("Chat Error:", err);
+  } catch (error: any) {
+    console.error(`[Error] Model: ${model}, Error:`, error);
     if (!res.headersSent) {
-      res.status(500).json({ error: err.message || "Internal Server Error" });
+      res.status(500).json({ error: error.message || "Internal Server Error" });
     } else {
-      res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+      res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
       res.end();
     }
   }
-});
+};
 
-// Vite/Static asset serving logic
+app.post("/api/chat", chatHandler);
+app.post("/chat", chatHandler);
+
 async function startServer() {
-  const PORT = Number(process.env.PORT) || 3000;
-  
+  // Vite middleware for development - Dynamic import to avoid loading Vite in production
   if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
@@ -155,14 +204,14 @@ async function startServer() {
 
   if (!process.env.VERCEL) {
     app.listen(PORT, "0.0.0.0", () => {
-      console.log(`Server running at http://localhost:${PORT}`);
+      console.log(`Server running on http://localhost:${PORT}`);
     });
   }
 }
 
-// Do not block the export on Vercel
+// Always start the server unless we are in the Vercel environment where it's handled as a function
 if (!process.env.VERCEL) {
-  startServer().catch(err => console.error("Startup failed:", err));
+  startServer().catch(console.error);
 }
 
 export default app;
