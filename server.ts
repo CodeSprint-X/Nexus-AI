@@ -18,8 +18,8 @@ app.use(express.json());
 // Groq SDK instance
 const getGroq = () => {
   const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) {
-    throw new Error("GROQ_API_KEY is not defined in environment variables.");
+  if (!apiKey || apiKey.trim() === "") {
+    throw new Error("GROQ_API_KEY is missing. Please add it to your project secrets in AI Studio Settings.");
   }
   return new Groq({ apiKey });
 };
