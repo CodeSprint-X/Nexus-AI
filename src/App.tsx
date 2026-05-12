@@ -15,19 +15,134 @@ import { Menu, PanelLeftClose, Sparkles, Wand2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { cn } from "./lib/utils";
 
+export interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: number;
+  modelHistories: Record<string, ChatMessage[]>;
+}
+
 export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [columns, setColumns] = useState(3);
-  const [history, setHistory] = useState<ChatMessage[]>([]);
+  
+  const [sessions, setSessions] = useState<ChatSession[]>(() => {
+    const saved = localStorage.getItem("nexus_sessions");
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error("Failed to parse sessions", e);
+      }
+    }
+    // Initial session
+    return [{
+      id: Date.now().toString(),
+      title: "New Interaction",
+      createdAt: Date.now(),
+      modelHistories: {}
+    }];
+  });
+
+  const [activeSessionId, setActiveSessionId] = useState<string>(() => {
+    const lastActive = localStorage.getItem("nexus_active_session_id");
+    const sessionExists = sessions.some(s => s.id === lastActive);
+    if (lastActive && sessionExists) return lastActive;
+    return sessions.length > 0 ? sessions[0].id : "";
+  });
+
   const [isConsensusOpen, setIsConsensusOpen] = useState(false);
   const [consensusContent, setConsensusContent] = useState("");
   const [isGeneratingConsensus, setIsGeneratingConsensus] = useState(false);
 
-  const { states, startStreaming, stopStreaming } = useStreamingChat();
+  const { states, startStreaming, stopStreaming, clearHistory, setModelHistories } = useStreamingChat();
+
+  // Load active session into model states
+  useEffect(() => {
+    const session = sessions.find(s => s.id === activeSessionId);
+    if (session) {
+      setModelHistories(session.modelHistories);
+    }
+  }, [activeSessionId, setModelHistories]);
+
+  // Sync session history from model states
+  useEffect(() => {
+    setSessions(prev => {
+      const updated = prev.map(session => {
+        if (session.id === activeSessionId) {
+          const modelHistories: Record<string, ChatMessage[]> = {};
+          Object.keys(states).forEach(id => {
+            modelHistories[id] = states[id].history;
+          });
+          
+          // Update title if it's still default and we have history
+          let title = session.title;
+          if (title === "New Interaction") {
+            const firstModelHistory = Object.values(modelHistories)[0];
+            if (firstModelHistory && firstModelHistory.length > 0) {
+              const firstUserMsg = firstModelHistory.find(m => m.role === "user");
+              if (firstUserMsg) {
+                title = firstUserMsg.content.slice(0, 40) + (firstUserMsg.content.length > 40 ? "..." : "");
+              }
+            }
+          }
+
+          return { ...session, modelHistories, title };
+        }
+        return session;
+      });
+      return JSON.stringify(updated) !== JSON.stringify(prev) ? updated : prev;
+    });
+  }, [states, activeSessionId]);
+
+  // Persist sessions
+  useEffect(() => {
+    localStorage.setItem("nexus_sessions", JSON.stringify(sessions));
+    localStorage.setItem("nexus_active_session_id", activeSessionId);
+  }, [sessions, activeSessionId]);
 
   const handleSend = (prompt: string) => {
     startStreaming(prompt);
-    setHistory(prev => [{ role: "user", content: prompt }, ...prev]);
+  };
+
+  const handleNewChat = () => {
+    const newSession: ChatSession = {
+      id: Date.now().toString(),
+      title: "New Interaction",
+      createdAt: Date.now(),
+      modelHistories: {}
+    };
+    setSessions(prev => [newSession, ...prev]);
+    setActiveSessionId(newSession.id);
+  };
+
+  const handleDeleteSession = (id: string) => {
+    setSessions(prev => {
+      const filtered = prev.filter(s => s.id !== id);
+      if (filtered.length === 0) {
+        return [{
+          id: Date.now().toString(),
+          title: "New Interaction",
+          createdAt: Date.now(),
+          modelHistories: {}
+        }];
+      }
+      return filtered;
+    });
+    
+    if (activeSessionId === id) {
+      setActiveSessionId(sessions.find(s => s.id !== id)?.id || "");
+    }
+  };
+
+  const handleClearEverything = () => {
+    setSessions([{
+      id: Date.now().toString(),
+      title: "New Interaction",
+      createdAt: Date.now(),
+      modelHistories: {}
+    }]);
+    setActiveSessionId(sessions[0]?.id || "");
   };
 
   const generateConsensus = async () => {
@@ -54,8 +169,12 @@ export default function App() {
       <Sidebar 
         isOpen={isSidebarOpen} 
         onToggle={() => setIsSidebarOpen(!isSidebarOpen)} 
-        history={history.filter(m => m.role === "user").map(m => ({ title: m.content, date: m.role }))} // Minimal mapping for sidebar
-        onClearHistory={() => setHistory([])}
+        sessions={sessions}
+        activeSessionId={activeSessionId}
+        onSelectSession={setActiveSessionId}
+        onNewChat={handleNewChat}
+        onDeleteSession={handleDeleteSession}
+        onClearAll={handleClearEverything}
       />
 
       <main className={cn(

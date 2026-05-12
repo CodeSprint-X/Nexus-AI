@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { GroqService, ChatMessage } from "../services/groqService";
 
 export type StreamStatus = "idle" | "streaming" | "completed" | "error";
@@ -17,15 +17,39 @@ const INITIAL_MODELS = [
   "llama-3.1-8b-instant",
 ];
 
+const STORAGE_KEY = "nexus_model_states";
+
 export function useStreamingChat() {
-  const [states, setStates] = useState<Record<string, ModelStreamState>>(
-    INITIAL_MODELS.reduce((acc, modelId) => {
+  const [states, setStates] = useState<Record<string, ModelStreamState>>(() => {
+    return INITIAL_MODELS.reduce((acc, modelId) => {
       acc[modelId] = { tokens: "", status: "idle", modelId, history: [] };
       return acc;
-    }, {} as Record<string, ModelStreamState>)
-  );
+    }, {} as Record<string, ModelStreamState>);
+  });
 
   const abortControllers = useRef<Record<string, AbortController>>({});
+
+  const setModelHistories = useCallback((histories: Record<string, ChatMessage[]>) => {
+    setStates(prev => {
+      const next = { ...prev };
+      INITIAL_MODELS.forEach(modelId => {
+        next[modelId] = {
+          ...next[modelId],
+          tokens: "",
+          status: "idle",
+          history: histories[modelId] || []
+        };
+      });
+      return next;
+    });
+  }, []);
+
+  const clearHistory = useCallback(() => {
+    setStates(INITIAL_MODELS.reduce((acc, modelId) => {
+      acc[modelId] = { tokens: "", status: "idle", modelId, history: [] };
+      return acc;
+    }, {} as Record<string, ModelStreamState>));
+  }, []);
 
   const startStreaming = useCallback((prompt: string) => {
     Object.values(abortControllers.current).forEach(c => c.abort());
@@ -71,18 +95,23 @@ export function useStreamingChat() {
               }));
             },
             onComplete: (fullContent) => {
+              // Strip thinking blocks from saved history
+              const cleanContent = fullContent.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+              
               setStates((prev) => {
                 const existingHistory = prev[modelId].history;
                 // Avoid double-adding if state updates were batched weirdly
                 const alreadyHasAssistant = existingHistory[existingHistory.length - 1]?.role === "assistant" && 
-                                            existingHistory[existingHistory.length - 1]?.content === fullContent;
+                                            existingHistory[existingHistory.length - 1]?.content === cleanContent;
+                
+                const nextHistory: ChatMessage[] = alreadyHasAssistant ? existingHistory : [...existingHistory, { role: "assistant" as const, content: cleanContent }];
                 
                 return {
                   ...prev,
                   [modelId]: { 
                     ...prev[modelId], 
-                    status: "completed",
-                    history: alreadyHasAssistant ? existingHistory : [...existingHistory, { role: "assistant", content: fullContent }]
+                    status: "completed" as const,
+                    history: nextHistory
                   },
                 };
               });
@@ -113,5 +142,5 @@ export function useStreamingChat() {
     });
   }, []);
 
-  return { states, startStreaming, stopStreaming };
+  return { states, startStreaming, stopStreaming, clearHistory, setModelHistories };
 }
