@@ -28,20 +28,23 @@ export function useStreamingChat() {
   const abortControllers = useRef<Record<string, AbortController>>({});
 
   const startStreaming = useCallback((prompt: string) => {
-    // Abort previous if any
     Object.values(abortControllers.current).forEach(c => c.abort());
 
     const userMessage: ChatMessage = { role: "user", content: prompt };
 
-    // Update all states with the new user message and set to streaming
+    // We'll capture the current history for each model to ensure they get their own multi-turn context
+    let currentModelHistories: Record<string, ChatMessage[]> = {};
+
     setStates((prev) => {
       const next = { ...prev };
       INITIAL_MODELS.forEach(modelId => {
+        const updatedHistory = [...prev[modelId].history, userMessage];
+        currentModelHistories[modelId] = updatedHistory;
         next[modelId] = { 
           ...prev[modelId],
           tokens: "", 
           status: "streaming", 
-          history: [...prev[modelId].history, userMessage] 
+          history: updatedHistory 
         };
       });
       return next;
@@ -51,48 +54,48 @@ export function useStreamingChat() {
       const controller = new AbortController();
       abortControllers.current[modelId] = controller;
 
-      // Access history in the stagger (using state from previous turn is okay here because it's a new call)
-      // but to be safer, we'll calculate it from what we just set
-      
       setTimeout(() => {
-        // We need the latest history for this model
-        setStates(currentStates => {
-          const messages = currentStates[modelId].history;
+        const messages = currentModelHistories[modelId];
 
-          GroqService.streamChat(
-            modelId,
-            messages,
-            {
-              onToken: (token) => {
-                setStates((prev) => ({
-                  ...prev,
-                  [modelId]: {
-                    ...prev[modelId],
-                    tokens: prev[modelId].tokens + token,
-                  },
-                }));
-              },
-              onComplete: (fullContent) => {
-                setStates((prev) => ({
+        GroqService.streamChat(
+          modelId,
+          messages,
+          {
+            onToken: (token) => {
+              setStates((prev) => ({
+                ...prev,
+                [modelId]: {
+                  ...prev[modelId],
+                  tokens: prev[modelId].tokens + token,
+                },
+              }));
+            },
+            onComplete: (fullContent) => {
+              setStates((prev) => {
+                const existingHistory = prev[modelId].history;
+                // Avoid double-adding if state updates were batched weirdly
+                const alreadyHasAssistant = existingHistory[existingHistory.length - 1]?.role === "assistant" && 
+                                            existingHistory[existingHistory.length - 1]?.content === fullContent;
+                
+                return {
                   ...prev,
                   [modelId]: { 
                     ...prev[modelId], 
                     status: "completed",
-                    history: [...prev[modelId].history, { role: "assistant", content: fullContent }]
+                    history: alreadyHasAssistant ? existingHistory : [...existingHistory, { role: "assistant", content: fullContent }]
                   },
-                }));
-              },
-              onError: (error) => {
-                setStates((prev) => ({
-                  ...prev,
-                  [modelId]: { ...prev[modelId], status: "error", error: error.message },
-                }));
-              },
+                };
+              });
             },
-            controller.signal
-          );
-          return currentStates;
-        });
+            onError: (error) => {
+              setStates((prev) => ({
+                ...prev,
+                [modelId]: { ...prev[modelId], status: "error", error: error.message },
+              }));
+            },
+          },
+          controller.signal
+        );
       }, index * 150);
     });
   }, []);
