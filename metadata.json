@@ -1,0 +1,6 @@
+{
+  "name": "Nexus AI",
+  "description": "Multi-model comparison chat UI that streams responses from llama-3.3-70b-versatile, deepseek-r1-70b, and mixtral-8x7b-32768 in parallel.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
