@@ -13,8 +13,8 @@ export interface ModelStreamState {
 
 const INITIAL_MODELS = [
   "llama-3.3-70b-versatile",
-  "llama-3.1-70b-versatile",
-  "deepseek-r1-distill-llama-70b",
+  "qwen/qwen3-32b",
+  "llama-3.1-8b-instant",
 ];
 
 const STORAGE_KEY = "nexus_model_states";

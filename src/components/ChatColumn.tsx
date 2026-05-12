@@ -36,8 +36,8 @@ const DeepSeekIcon = () => (
 
 const MODEL_META: Record<string, { name: string, icon: React.ReactNode }> = {
   "llama-3.3-70b-versatile": { name: "GPT-5 mini", icon: <OpenAIIcon /> },
-  "llama-3.1-70b-versatile": { name: "Gemini 2.5 Lite", icon: <GeminiIcon /> },
-  "deepseek-r1-distill-llama-70b": { name: "DeepSeek Chat", icon: <DeepSeekIcon /> },
+  "qwen/qwen3-32b": { name: "Gemini 2.5 Lite", icon: <GeminiIcon /> },
+  "llama-3.1-8b-instant": { name: "DeepSeek Chat", icon: <DeepSeekIcon /> },
 };
 
 export const ChatColumn: React.FC<ChatColumnProps> = ({ state, modelId }) => {
