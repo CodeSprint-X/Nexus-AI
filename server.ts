@@ -1,5 +1,4 @@
 import express from "express";
-import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
 import Groq from "groq-sdk";
@@ -14,6 +13,13 @@ const app = express();
 const PORT = 3000;
 
 app.use(express.json());
+
+// Enable CORS for Vercel
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+  next();
+});
 
 // Groq SDK instance
 const getGroqApiKey = () => {
@@ -49,8 +55,8 @@ app.post("/api/chat", async (req, res) => {
         headers: {
           "Authorization": `Bearer ${apiKey}`,
           "Content-Type": "application/json",
-          "HTTP-Referer": "https://nexus-ai.vercel.app", // Optional
-          "X-Title": "Nexus AI", // Optional
+          "HTTP-Referer": "https://nexus-ai.vercel.app", 
+          "X-Title": "Nexus AI",
         },
         body: JSON.stringify({
           model,
@@ -67,7 +73,7 @@ app.post("/api/chat", async (req, res) => {
       if (stream) {
         res.setHeader("Content-Type", "text/event-stream");
         res.setHeader("Cache-Control", "no-cache");
-        res.setHeader("Connection", "keep-alive");
+        // Removed Connection: keep-alive for Vercel stability
 
         const reader = response.body?.getReader();
         const decoder = new TextDecoder();
@@ -116,7 +122,7 @@ app.post("/api/chat", async (req, res) => {
       if (stream) {
         res.setHeader("Content-Type", "text/event-stream");
         res.setHeader("Cache-Control", "no-cache");
-        res.setHeader("Connection", "keep-alive");
+        // Removed Connection: keep-alive for Vercel stability
 
         const chatCompletion = await groq.chat.completions.create({
           messages,
@@ -153,17 +159,15 @@ app.post("/api/chat", async (req, res) => {
 });
 
 async function startServer() {
-
-  // Vite middleware for development
+  // Vite middleware for development - Dynamic import to avoid loading Vite in production
   if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
   } else if (!process.env.VERCEL) {
-    // Only serve static files here if we're NOT on Vercel.
-    // On Vercel, static files are handled by the platform's native routing.
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
     app.get("*", (req, res) => {
@@ -171,9 +175,11 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
+  if (!process.env.VERCEL) {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
+  }
 }
 
 // Always start the server unless we are in the Vercel environment where it's handled as a function
@@ -182,3 +188,4 @@ if (!process.env.VERCEL) {
 }
 
 export default app;
+
